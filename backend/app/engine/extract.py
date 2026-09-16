@@ -187,9 +187,18 @@ def clean_text(v) -> str:
 
 
 def norm_key(name: str, category: str) -> str:
-    """Dedupe key: case/space/punctuation-insensitive name + category."""
+    """Dedupe key: case/space/punctuation-insensitive name + category.
+
+    Must be UNICODE-aware. The original tool used `[^a-z0-9]+`, which only
+    ever saw English menus; on a Devanagari (or Tamil, Bengali, Arabic...)
+    menu it strips EVERY character, so all 83 dishes collapse to the same
+    empty key, get deduped down to one, and emit dozens of phantom "price
+    conflict" warnings. `str.isalnum()` is true for letters and digits in
+    any script, so this keeps the same case/punctuation insensitivity
+    without discarding non-Latin names.
+    """
     def squash(s: str) -> str:
-        return re.sub(r"[^a-z0-9]+", "", s.lower())
+        return "".join(ch for ch in (s or "").casefold() if ch.isalnum())
     return f"{squash(name)}|{squash(category)}"
 
 

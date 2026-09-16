@@ -107,6 +107,30 @@ async def log(db: AsyncSession, job: Job, level: str, message: str, item_id: uui
     await db.commit()
 
 
+async def log_many(db: AsyncSession, job: Job, level: str, messages: list[str],
+                   cap: int = 15) -> None:
+    """Write many related events in ONE commit, capped.
+
+    `log()` commits per call so a single important line survives a crash. That
+    is wrong for bulk notes: one real extraction produced ~160 of them, and at
+    a ~2.7s round-trip to the pooled database that alone took nearly 8 minutes
+    of the user's time. Here we write at most `cap` lines plus a summary, in a
+    single transaction.
+    """
+    if not messages:
+        return
+    shown = messages[:cap]
+    for m in shown:
+        db.add(JobEvent(id=uuid.uuid4(), job_id=job.id, level=level, message=m[:2000]))
+    if len(messages) > cap:
+        db.add(JobEvent(
+            id=uuid.uuid4(), job_id=job.id, level=level,
+            message=f"... and {len(messages) - cap} more similar messages "
+                    f"({len(messages)} total).",
+        ))
+    await db.commit()
+
+
 # ---------------------------------------------------------------------------
 # job lifecycle
 # ---------------------------------------------------------------------------
@@ -531,8 +555,7 @@ async def run_extract(db: AsyncSession, job: Job, shop: Shop, api_key: str) -> N
                 await db.flush()
 
         merged, notes = extract.merge(per_photo)
-        for note in notes:
-            await log(db, job, "info", note)
+        await log_many(db, job, "info", list(notes))
 
         existing_result = await db.execute(select(Item).where(Item.shop_id == shop.id))
         existing_items = existing_result.scalars().all()
@@ -540,6 +563,7 @@ async def run_extract(db: AsyncSession, job: Job, shop: Shop, api_key: str) -> N
         next_position = max((it.position for it in existing_items), default=-1) + 1
 
         seen_this_run: dict[str, Item] = {}
+        conflict_notes: list[str] = []
         for m in merged:
             key = extract.norm_key(m["item_name"], m["category"])
             if key in seen_this_run:
@@ -547,7 +571,7 @@ async def run_extract(db: AsyncSession, job: Job, shop: Shop, api_key: str) -> N
                 # flag it rather than violate the (shop, name, category)
                 # unique constraint with a second row.
                 seen_this_run[key].price_conflict = True
-                await log(db, job, "warn", f"price conflict for '{m['item_name']}'")
+                conflict_notes.append(f"price conflict for '{m['item_name']}'")
                 continue
             existing = existing_by_key.get(key)
             if existing is not None:
@@ -572,6 +596,24 @@ async def run_extract(db: AsyncSession, job: Job, shop: Shop, api_key: str) -> N
                 db.add(new_item)
                 existing_by_key[key] = new_item
                 seen_this_run[key] = new_item
+
+        await log_many(db, job, "warn", conflict_notes)
+        await db.commit()
+
+        # Chain classification. Extraction alone leaves every item at NEW with
+        # no confidence score, so the Review screen has nothing to show and the
+        # user is dumped on an empty page believing the run failed. Doing it
+        # here (rather than as a second call from the browser) also means
+        # closing the tab between the two steps cannot strand the items.
+        n_new = await db.scalar(
+            select(func.count()).select_from(Item)
+            .where(Item.shop_id == shop.id, Item.status == ItemStatus.NEW)
+        )
+        if n_new:
+            await log(db, job, "info", f"extracted {n_new} item(s); classifying...")
+            await run_classify(db, job, shop, api_key)
+            if job.status == JobStatus.FAILED:
+                return
 
         job.status = JobStatus.DONE
         job.finished_at = datetime.now(timezone.utc)

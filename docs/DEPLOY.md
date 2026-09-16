@@ -100,8 +100,10 @@ All four take the same Dockerfile unchanged.
 2. Render → **New → Web Service** → connect the repo.
 3. Settings:
    - **Runtime / Language:** Docker
-   - **Dockerfile path:** `webapp/Dockerfile`
-   - **Docker build context:** `webapp`
+   - **Dockerfile path:** `./Dockerfile`
+   - **Docker build context:** `.`
+     (the repo root IS the app: `webapp/` was pushed AS the repository root,
+     so there is no `webapp/` prefix inside the repo)
    - **Health check path:** `/api/health`
    - **Instance type:** Free
 4. Add every env var from §5.
@@ -113,16 +115,18 @@ Your link is `https://<service-name>.onrender.com`.
 
 ## 4. Push to GitHub
 
-From the **project root** (the folder containing `webapp/`):
+Already done: `webapp/` was pushed as the **repository root** of
+https://github.com/Lolxd-1/Image-Generator, so the repo has `backend/`,
+`frontend/`, `docs/` and `Dockerfile` at its top level. For later pushes:
 
 ```bash
-git init
-git add webapp .gitignore
-git commit -m "Menu catalog generator: web app"
-git branch -M main
-git remote add origin https://github.com/<you>/<repo>.git
-git push -u origin main
+cd webapp
+git add -A && git commit -m "..."
+git push
 ```
+
+Note: `git init` defaults the branch to `master` while the remote expects
+`main` — `git branch -M main` once, and that mismatch goes away.
 
 Confirm `.env` is **not** in the commit before pushing:
 
