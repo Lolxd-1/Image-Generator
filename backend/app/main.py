@@ -1,5 +1,6 @@
 """FastAPI application entrypoint: startup lifespan, routers, error handling, SPA hosting."""
 import logging
+from datetime import datetime, timezone
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -9,6 +10,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
+from app.config import settings
 from app.db import init_models
 from app.errors import AppError, app_error_handler
 
@@ -35,6 +37,10 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="Menu Catalog Automation", lifespan=lifespan)
 
+# Process start time: a changing value here proves a redeploy actually
+# restarted the app, even when the commit is the same.
+_STARTED_AT = datetime.now(timezone.utc).isoformat(timespec="seconds")
+
 app.add_exception_handler(AppError, app_error_handler)
 
 
@@ -57,13 +63,20 @@ for _router in (auth_router, shops_router, items_router,
                 images_router, jobs_router, export_router):
     app.include_router(_router, prefix="/api")
 
+
 @app.get("/api/health")
 async def health() -> dict[str, str]:
-    return {"status": "ok"}
+    """Liveness probe, plus which build is actually serving.
 
+    "ok" alone cannot tell you whether a fix you just pushed is live, which
+    makes debugging a deploy guesswork. `commit` answers that directly.
+    """
+    return {
+        "status": "ok",
+        "commit": settings.build_commit,
+        "started_at": _STARTED_AT,
+    }
 
-# Routers are owned by other agents; include defensively so this app boots
-# even while those modules are still being written.
 
 # Mount the built SPA, if present. Anything not under /api falls back to
 # index.html so client-side routing works on a hard refresh / deep link.
