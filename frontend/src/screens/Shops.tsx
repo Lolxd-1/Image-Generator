@@ -1,12 +1,12 @@
 /// screens/Shops.tsx — landing screen: shop grid with a resume-where-you-
 /// left-off primary action per shop, new-shop creation, and archive/
 /// unarchive.
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import type { FormEvent } from "react";
-import { useNavigate } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { ApiError, patch } from "../api/client";
-import { qk, useCreateShop, useShops } from "../api/hooks";
+import { qk, useCreateShop, useDeleteShop, useShops } from "../api/hooks";
 import type { Shop, ShopSummary, UpdateShopPayload } from "../api/types";
 import { Badge } from "../components/Badge";
 import { Button } from "../components/Button";
@@ -70,10 +70,12 @@ function ShopCard({
   shop,
   archiving,
   onArchiveToggle,
+  onDelete,
 }: {
   shop: ShopSummary;
   archiving: boolean;
   onArchiveToggle: (shop: ShopSummary) => void;
+  onDelete: (shop: ShopSummary) => void;
 }) {
   const navigate = useNavigate();
   const resume = resumeFor(shop);
@@ -87,15 +89,68 @@ function ShopCard({
       </CardHeader>
       <p className="text-xs text-base-400">Created {formatDate(shop.created_at)}</p>
       <p className="mt-2 text-sm text-base-200">{progressSummary(shop)}</p>
-      <div className="mt-4 flex items-center gap-2">
+      <div className="mt-4 flex flex-wrap items-center gap-2">
         <Button size="sm" disabled={archived} onClick={() => navigate(resume.path)}>
           {resume.label}
         </Button>
         <Button size="sm" variant="ghost" loading={archiving} onClick={() => onArchiveToggle(shop)}>
           {archived ? "Unarchive" : "Archive"}
         </Button>
+        <Button size="sm" variant="danger" onClick={() => onDelete(shop)}>
+          Delete
+        </Button>
       </div>
     </Card>
+  );
+}
+
+/** Irreversible: requires the operator to type the shop name to enable the button. */
+function DeleteShopModal({
+  shop,
+  open,
+  onClose,
+}: {
+  shop: ShopSummary | null;
+  open: boolean;
+  onClose: () => void;
+}) {
+  const [typed, setTyped] = useState("");
+  const deleteShop = useDeleteShop();
+  const toast = useToast();
+
+  useEffect(() => {
+    if (open) setTyped("");
+  }, [open]);
+
+  if (!shop) return null;
+  const matches = typed.trim() === shop.name;
+
+  async function handleDelete() {
+    try {
+      await deleteShop.mutateAsync(shop!.id);
+      toast.show(`Deleted "${shop!.name}"`, "success");
+      onClose();
+    } catch (err) {
+      toast.show(err instanceof ApiError ? err.message : "Could not delete the shop.", "error");
+    }
+  }
+
+  return (
+    <Modal open={open} onClose={onClose} title={`Delete "${shop.name}"?`}>
+      <p className="mb-3 text-sm text-base-300">
+        This permanently deletes the shop, its catalog, and all stored images. This cannot be
+        undone. Type <span className="font-semibold text-base-100">{shop.name}</span> to confirm.
+      </p>
+      <Input value={typed} onChange={(e) => setTyped(e.target.value)} autoFocus />
+      <div className="mt-4 flex justify-end gap-2">
+        <Button variant="ghost" onClick={onClose}>
+          Cancel
+        </Button>
+        <Button variant="danger" disabled={!matches} loading={deleteShop.isPending} onClick={handleDelete}>
+          Delete permanently
+        </Button>
+      </div>
+    </Modal>
   );
 }
 
@@ -147,6 +202,7 @@ export default function Shops() {
   const [showArchived, setShowArchived] = useState(false);
   const [modalOpen, setModalOpen] = useState(false);
   const [archivingId, setArchivingId] = useState<string | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<ShopSummary | null>(null);
   const setArchived = useSetArchived();
   const toast = useToast();
 
@@ -185,6 +241,11 @@ export default function Shops() {
             />
             Show archived
           </label>
+          <Link to="/settings">
+            <Button size="sm" variant="secondary">
+              Settings
+            </Button>
+          </Link>
           <Button size="sm" onClick={() => setModalOpen(true)}>
             New shop
           </Button>
@@ -230,12 +291,14 @@ export default function Shops() {
               shop={shop}
               archiving={archivingId === shop.id}
               onArchiveToggle={handleArchiveToggle}
+              onDelete={setDeleteTarget}
             />
           ))}
         </div>
       )}
 
       <NewShopModal open={modalOpen} onClose={() => setModalOpen(false)} />
+      <DeleteShopModal shop={deleteTarget} open={Boolean(deleteTarget)} onClose={() => setDeleteTarget(null)} />
     </div>
   );
 }

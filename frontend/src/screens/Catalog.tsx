@@ -2,7 +2,16 @@
 /// edit, per-image download/regenerate, and the export-to-SmartBiz panel.
 import { useMemo, useRef, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
-import { useCreateJob, useItems, useRegenerateItem, useUpdateItem } from "../api/hooks";
+import { ApiError } from "../api/client";
+import {
+  shopImagesZipUrl,
+  useCreateJob,
+  useItems,
+  usePurgeShopImages,
+  useRegenerateItem,
+  useShopStorage,
+  useUpdateItem,
+} from "../api/hooks";
 import { Button } from "../components/Button";
 import { EmptyState } from "../components/EmptyState";
 import { Spinner } from "../components/Spinner";
@@ -10,6 +19,7 @@ import { useToast } from "../components/Toast";
 import { CatalogCard } from "./catalog/CatalogCard";
 import { ExportPanel } from "./catalog/ExportPanel";
 import { setStoredJobId } from "./generate/jobStorage";
+import { formatBytes } from "./settings/StorageSection";
 
 const SHOWN_STATUSES = new Set(["generated", "hosted"]);
 
@@ -22,6 +32,8 @@ export default function Catalog() {
   const updateM = useUpdateItem(shopId ?? "");
   const regenM = useRegenerateItem(shopId ?? "");
   const createJobM = useCreateJob(shopId ?? "");
+  const shopStorageQ = useShopStorage(shopId);
+  const purgeM = usePurgeShopImages();
 
   const [highlighted, setHighlighted] = useState<string | null>(null);
   const cardRefs = useRef<Record<string, HTMLDivElement | null>>({});
@@ -56,6 +68,23 @@ export default function Catalog() {
       // still requeued, so send them to whatever run is already tracked.
       toast.show("Item requeued. A generation run is already active — opening it.", "info");
       navigate(`/shops/${shopId}/generate`);
+    }
+  }
+
+  async function handleFreeUpSpace() {
+    if (!shopId) return;
+    if (
+      !window.confirm(
+        "Free up space by deleting this shop's generated images from storage? Download them first if you need them — this cannot be undone.",
+      )
+    ) {
+      return;
+    }
+    try {
+      const result = await purgeM.mutateAsync(shopId);
+      toast.show(`Freed ${formatBytes(result.bytes_freed)}`, "success");
+    } catch (err) {
+      toast.show(err instanceof ApiError ? err.message : "Could not free up space.", "error");
     }
   }
 
@@ -100,13 +129,26 @@ export default function Catalog() {
 
   return (
     <div className="mx-auto flex max-w-6xl flex-col gap-4 p-6">
-      <header className="flex items-center justify-between gap-3">
+      <header className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <h1 className="text-lg font-semibold text-base-100">Catalog</h1>
           <p className="text-xs text-base-400">
             {items.length} dish(es) ready
             {excludedCount > 0 && ` · ${excludedCount} skipped/failed hidden from this grid`}
+            {shopStorageQ.data && ` · ${formatBytes(shopStorageQ.data.total_bytes)} stored`}
           </p>
+        </div>
+        <div className="flex items-center gap-2">
+          {shopId && (
+            <a href={shopImagesZipUrl(shopId)}>
+              <Button size="sm" variant="secondary">
+                Download all images
+              </Button>
+            </a>
+          )}
+          <Button size="sm" variant="secondary" loading={purgeM.isPending} onClick={handleFreeUpSpace}>
+            Free up space
+          </Button>
         </div>
       </header>
 

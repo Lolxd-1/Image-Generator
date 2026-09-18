@@ -71,12 +71,18 @@ export function CatalogCard({
         highlighted && "border-warn-500 ring-2 ring-warn-500/50",
       )}
     >
-      <img
-        src={imageUrl(item.image_id ?? "")}
-        alt={item.name}
-        className="h-40 w-full rounded-md border border-base-700 object-cover"
-        loading="lazy"
-      />
+      {item.image_id ? (
+        <img
+          src={imageUrl(item.image_id)}
+          alt={item.name}
+          className="h-40 w-full rounded-md border border-base-700 object-cover"
+          loading="lazy"
+        />
+      ) : (
+        <div className="flex h-40 w-full items-center justify-center rounded-md border border-base-700 bg-base-800 text-xs text-base-400">
+          Image removed to free space
+        </div>
+      )}
 
       {editing ? (
         <div className="flex flex-col gap-2">

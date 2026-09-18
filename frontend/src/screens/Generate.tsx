@@ -6,7 +6,14 @@
 // inference. ETA is waitMs * remaining, not an observed rate.
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useParams, useSearchParams } from "react-router-dom";
-import { useActiveJob, useItems, useJob, useJobEvents, useRegenerateItem } from "../api/hooks";
+import {
+  useActiveJob,
+  useApiKeys,
+  useItems,
+  useJob,
+  useJobEvents,
+  useRegenerateItem,
+} from "../api/hooks";
 import { useGenerateLoop } from "../lib/generateLoop";
 import { Button } from "../components/Button";
 import { EmptyState } from "../components/EmptyState";
@@ -56,7 +63,10 @@ export default function Generate() {
   }, [shopId, jobId]);
 
   const jobQ = useJob(jobId, { refetchInterval: 4000 });
-  const loop = useGenerateLoop(jobId);
+  const keysQ = useApiKeys();
+  const enabledKeys = keysQ.data?.filter((k) => k.enabled) ?? [];
+  const lanes = Math.min(Math.max(enabledKeys.length, 1), 6);
+  const loop = useGenerateLoop(jobId, lanes);
   const itemsQ = useItems(shopId, {});
   const eventsQ = useJobEvents(jobId);
   const regenM = useRegenerateItem(shopId ?? "");
@@ -77,7 +87,7 @@ export default function Generate() {
   const failed = progressed > 0 || loop.running ? loop.failed : jobQ.data?.failed ?? 0;
   const total = jobQ.data?.total ?? done + failed + loop.remaining;
   const remaining = loop.running || progressed > 0 ? loop.remaining : Math.max(total - done - failed, 0);
-  const eta = loop.waitMs !== null ? Math.round((loop.waitMs * remaining) / 1000) : null;
+  const eta = loop.waitMs !== null ? Math.round((loop.waitMs * remaining) / 1000 / lanes) : null;
 
   const items = (itemsQ.data?.items ?? [])
     .filter((i) => ACTIVE_STATUSES.has(i.status))
@@ -114,6 +124,11 @@ export default function Generate() {
       )}
 
       {loop.backingOff && !jobLevelFailed && <BackingOffBanner waitMs={loop.waitMs} />}
+
+      <p className="text-xs text-base-400">
+        {lanes} lane{lanes === 1 ? "" : "s"} running on {enabledKeys.length} key
+        {enabledKeys.length === 1 ? "" : "s"}
+      </p>
 
       <ProgressPanel
         done={done}

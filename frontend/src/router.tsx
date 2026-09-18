@@ -11,6 +11,7 @@ import Setup from "./screens/Setup";
 import Review from "./screens/Review";
 import Generate from "./screens/Generate";
 import Catalog from "./screens/Catalog";
+import Settings from "./screens/Settings";
 
 function RequireAuth() {
   const { data, isLoading, isError, error } = useMe();
@@ -47,6 +48,7 @@ export function AppRoutes() {
       <Route path="/login" element={<Login />} />
       <Route element={<RequireAuth />}>
         <Route path="/" element={<Shops />} />
+        <Route path="/settings" element={<Settings />} />
         <Route path="/shops/:id/setup" element={<Setup />} />
         <Route path="/shops/:id/review" element={<Review />} />
         <Route path="/shops/:id/generate" element={<Generate />} />
