@@ -9,3 +9,4 @@
   why: the window is a concurrent delete of a key mid-lease, the blast radius is one 500 on
   one /step call, and the lane retries — cost if wrong: one spurious 500 in a log.
 - T03 done: /api/auth/keys CRUD + test, pool-aware /me, boot backfill. gate PASS.
+- T04 done: generate_step leases a key per call; auth failure disables one key, not the job. gate PASS.
