@@ -1,0 +1,28 @@
+# ORCHESTRATOR STATE
+<!-- Source of truth for this run. Any agent or tool resuming work reads this first. -->
+run: multi-key-pool
+branch: orch/multi-key-pool
+run-base: a37b524cc5fd47704c1a5ad78ff0e8c4b1c5a6b3
+status: executing
+updated: 2026-09-18T08:40:00Z · Claude Code / Opus 5
+<!-- status: recon | planning | awaiting-approval | executing | integrating | done | blocked -->
+
+## NEXT ACTION
+Dispatch T01 (models + leased_until + schemas).
+
+## Baseline
+`cd backend && python -m pytest -q && cd ../frontend && npx tsc --noEmit` -> exit 0.
+95 passed in 155s, typecheck clean. No pre-existing failures.
+
+## Tasks
+- [ ] T01 api_keys table, leased_until, schemas — w1 — deps none
+- [ ] T02 keypool engine + tests — w2 — deps T01
+- [ ] T03 keys router, /me, boot backfill — w3 — deps T02
+- [ ] T04 route generate_step through the pool — w4 — deps T02
+- [ ] T05 storage usage, purge, delete catalog — w5 — deps T01
+- [ ] T06 frontend api layer + N-lane loop — w6 — deps T03,T04,T05
+- [ ] T07 Settings screen + delete/download UI — w7 — deps T06
+
+## Open questions
+- The user's Gemini keys have not been pasted yet. Nothing in the build depends on them; they
+  go in through the Settings page (or `POST /api/auth/keys`) once the run is green.
