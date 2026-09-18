@@ -8,7 +8,7 @@ updated: 2026-09-18T08:40:00Z · Claude Code / Opus 5
 <!-- status: recon | planning | awaiting-approval | executing | integrating | done | blocked -->
 
 ## NEXT ACTION
-Gate T02, then review it (high risk), then dispatch T03.
+Review T02 (high risk); gate T03; then T04.
 
 ## Baseline
 `cd backend && python -m pytest -q && cd ../frontend && npx tsc --noEmit` -> exit 0.
@@ -16,8 +16,8 @@ Gate T02, then review it (high risk), then dispatch T03.
 
 ## Tasks
 - [x] T01 api_keys table, leased_until, schemas — w1 — done e0f7451..78e8dc6 (gate PASS)
-- [~] T02 keypool engine + tests — w2 — deps T01
-- [ ] T03 keys router, /me, boot backfill — w3 — deps T02
+- [x] T02 keypool engine + tests — w2 — done 30d3f7c..de06ec1 (gate PASS, review pending)
+- [~] T03 keys router, /me, boot backfill — w3 — deps T02
 - [ ] T04 route generate_step through the pool — w4 — deps T02
 - [ ] T05 storage usage, purge, delete catalog — w5 — deps T01
 - [ ] T06 frontend api layer + N-lane loop — w6 — deps T03,T04,T05
