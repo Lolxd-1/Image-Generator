@@ -20,8 +20,8 @@ Gate T06, then T07, then Phase 4.
 - [x] T03 keys router, /me, boot backfill — w3 — done 0a8a91e..a5d9904 (gate PASS)
 - [x] T04 route generate_step through the pool — w4 — done 663760f..62a4a59 (gate PASS, review pending)
 - [x] T05 storage usage, purge, delete catalog — w5 — done fe256c9..c9cc9cc (gate PASS)
-- [~] T06 frontend api layer + N-lane loop — w6 — deps T03,T04,T05
-- [ ] T07 Settings screen + delete/download UI — w7 — deps T06
+- [x] T06 frontend api layer + N-lane loop — w6 — done 1a9c2f1..c15d194 (gate PASS)
+- [~] T07 Settings screen + delete/download UI — w7 — deps T06
 
 ## Open questions
 - The user's Gemini keys have not been pasted yet. Nothing in the build depends on them; they

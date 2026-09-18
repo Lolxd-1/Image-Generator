@@ -17,3 +17,4 @@
 - Finding (operator, not code): all 7 of the user's Gemini keys return 403 SERVICE_DISABLED -
   aiplatform.googleapis.com is not enabled in any of their 7 GCP projects. The pool stays
   empty until the user enables it; nothing in the build depends on it.
+- T06 done: N-lane generate loop + key/storage hooks. gate PASS.
