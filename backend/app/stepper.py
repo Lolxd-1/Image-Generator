@@ -381,12 +381,13 @@ async def generate_step(db: AsyncSession, job: Job, shop: Shop, user: User) -> d
             item.status = ItemStatus.FAILED
             item.last_error = "no reference image configured for this shop or item"
             job.failed += 1
+            pace_delay = (await pacer.get_or_create(db, key_hash)).delay_s
             await keypool.release_now(db, key_hash)
             await db.commit()
             await log(db, job, "error", item.last_error, item.id)
             return _step_result(
-                "item_failed", item=_step_item(item), next_step_ms=0,
-                key_hint=key_hint, lanes=lanes, job=job,
+                "item_failed", item=_step_item(item), next_delay_ms=int(pace_delay * 1000),
+                next_step_ms=0, key_hint=key_hint, lanes=lanes, job=job,
             )
         ref_jpeg = await _get_ref_bytes(db, ref_image_id)
 
