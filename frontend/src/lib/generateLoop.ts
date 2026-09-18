@@ -111,6 +111,12 @@ export function useGenerateLoop(jobId: string | undefined, lanes?: number): Gene
 
   // Ref-based RUN guard: is the loop running at all (not per-lane).
   const runningRef = useRef(false);
+  // Bumped by start()/stopAll(). A lane captures this before its fetch and
+  // discards the response if it no longer matches: a pause() followed by a
+  // start() reuses the same lane indices and re-sets runningRef, so that
+  // guard alone cannot tell a stale in-flight response (from the paused run)
+  // apart from a fresh one (from the run the user just restarted).
+  const runIdRef = useRef(0);
   // Desired number of lanes right now (grows/shrinks with the server's `lanes`).
   const laneTargetRef = useRef(0);
   // Indices of lanes currently started (may or may not have a request in
@@ -153,6 +159,7 @@ export function useGenerateLoop(jobId: string | undefined, lanes?: number): Gene
 
   const stopAll = useCallback(() => {
     runningRef.current = false;
+    runIdRef.current += 1;
     laneTargetRef.current = 0;
     clearAllTimers();
     laneAliveRef.current.clear();
@@ -233,6 +240,7 @@ export function useGenerateLoop(jobId: string | undefined, lanes?: number): Gene
       const id = jobIdRef.current;
       if (!id) return;
 
+      const runId = runIdRef.current;
       laneInFlightRef.current.add(i);
       updateActiveLanes();
 
@@ -240,6 +248,7 @@ export function useGenerateLoop(jobId: string | undefined, lanes?: number): Gene
       try {
         result = await post<StepResult>(`/jobs/${id}/step`);
       } catch (err) {
+        if (runId !== runIdRef.current) return; // a paused/restarted run — not ours to handle
         laneInFlightRef.current.delete(i);
         updateActiveLanes();
         if (!mountedRef.current || !runningRef.current || !laneAliveRef.current.has(i)) return;
@@ -260,6 +269,7 @@ export function useGenerateLoop(jobId: string | undefined, lanes?: number): Gene
         return;
       }
 
+      if (runId !== runIdRef.current) return; // stale response from a paused/restarted run
       laneInFlightRef.current.delete(i);
       updateActiveLanes();
       if (!mountedRef.current || !runningRef.current || !laneAliveRef.current.has(i)) return;
@@ -311,6 +321,7 @@ export function useGenerateLoop(jobId: string | undefined, lanes?: number): Gene
     if (!jobIdRef.current) return;
     const L = Math.min(Math.max(1, lanes ?? 1), MAX_LANES);
     runningRef.current = true;
+    runIdRef.current += 1;
     laneTargetRef.current = L;
     setRunning(true);
     setError(null);

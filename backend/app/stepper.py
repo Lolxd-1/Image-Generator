@@ -286,76 +286,85 @@ async def generate_step(db: AsyncSession, job: Job, shop: Shop, user: User) -> d
     key_hash, key_hint = key_row.key_hash, key_row.key_hint
     job.api_key_hash = key_hash  # informational only: records the LAST key used
 
-    # Step 3: atomically claim ONE item. A single UPDATE ... RETURNING driven
-    # by a FOR UPDATE SKIP LOCKED subquery, so two concurrent callers (two
-    # browser tabs, two users hitting the same shop) can never claim the same
-    # row - there is no separate SELECT-then-UPDATE to race.
-    claim_subq = (
-        select(Item.id)
-        .where(Item.shop_id == shop.id, Item.status == ItemStatus.QUEUED)
-        .order_by(Item.position)
-        .with_for_update(skip_locked=True)
-        .limit(1)
-    )
-    claim_stmt = (
-        update(Item)
-        .where(Item.id == claim_subq.scalar_subquery())
-        .values(status=ItemStatus.GENERATING)
-        .returning(Item)
-        .execution_options(synchronize_session=False)
-    )
-    item = (await db.execute(claim_stmt)).scalars().first()
-
-    # Step 4: nothing left to claim -> the job *may* be done.
-    #
-    # Before declaring completion, sweep for items stranded in GENERATING by a
-    # request that died mid-flight (a host restart, a dropped connection). Doing
-    # the sweep here rather than only at job start means a long run self-heals:
-    # otherwise a single crashed step would silently drop that dish from the
-    # catalogue and the run would report "complete" while being one image short.
-    if item is None:
-        # No item claimed with this leased key -> give it back before doing
-        # anything else, so it is immediately available to the next caller.
-        await keypool.release_now(db, key_hash)
-
-        # A step request cannot outlive gemini.API_TIMEOUT (90s) by much, so
-        # anything at GENERATING for 3 minutes is genuinely stranded, not busy.
-        recovered = await requeue_stale(db, shop.id, older_than_seconds=180)
-        if recovered:
-            await log(
-                db, job, "warn",
-                f"Recovered {recovered} item(s) stranded mid-generation and "
-                f"returned them to the queue.",
-            )
-            await db.commit()
-            # Do not complete: the loop should come straight back for them.
-            return _step_result("waiting", retry_after_ms=1000, next_step_ms=1000, lanes=lanes, job=job)
-
-        # Still-young GENERATING rows mean another caller (a second tab, or a
-        # colleague on the same shop) is mid-flight on the last item(s). Marking
-        # the job DONE here would end their run and drop those dishes from the
-        # catalogue, so wait for them instead of completing.
-        inflight = await db.scalar(
-            select(func.count())
-            .select_from(Item)
-            .where(Item.shop_id == shop.id, Item.status == ItemStatus.GENERATING)
-        )
-        if inflight:
-            await db.commit()
-            return _step_result("waiting", retry_after_ms=5000, next_step_ms=5000, lanes=lanes, job=job)
-
-        job.status = JobStatus.DONE
-        job.finished_at = now
-        await db.commit()
-        return _step_result("complete", lanes=lanes, job=job)
-
-    # Commit the claim in its own transaction, separately from everything
-    # that follows. If the process dies anywhere below, this item is durably
-    # parked at GENERATING - never lost, never double-claimed - and
-    # requeue_stale() reclaims it once older_than_seconds has passed.
-    await db.commit()
-
+    # `item` stays None until Step 3 actually claims one; the except below
+    # must not dereference it when a failure happens before that point.
+    item: Item | None = None
     try:
+        # Step 3: atomically claim ONE item. A single UPDATE ... RETURNING driven
+        # by a FOR UPDATE SKIP LOCKED subquery, so two concurrent callers (two
+        # browser tabs, two users hitting the same shop) can never claim the same
+        # row - there is no separate SELECT-then-UPDATE to race.
+        claim_subq = (
+            select(Item.id)
+            .where(Item.shop_id == shop.id, Item.status == ItemStatus.QUEUED)
+            .order_by(Item.position)
+            .with_for_update(skip_locked=True)
+            .limit(1)
+        )
+        claim_stmt = (
+            update(Item)
+            .where(Item.id == claim_subq.scalar_subquery())
+            .values(status=ItemStatus.GENERATING)
+            .returning(Item)
+            .execution_options(synchronize_session=False)
+        )
+        item = (await db.execute(claim_stmt)).scalars().first()
+
+        # Step 4: nothing left to claim -> the job *may* be done.
+        #
+        # Before declaring completion, sweep for items stranded in GENERATING by a
+        # request that died mid-flight (a host restart, a dropped connection). Doing
+        # the sweep here rather than only at job start means a long run self-heals:
+        # otherwise a single crashed step would silently drop that dish from the
+        # catalogue and the run would report "complete" while being one image short.
+        if item is None:
+            # No item claimed with this leased key -> give it back before doing
+            # anything else, so it is immediately available to the next caller.
+            await keypool.release_now(db, key_hash)
+
+            # A step request cannot outlive gemini.API_TIMEOUT (90s) by much, so
+            # anything at GENERATING for 3 minutes is genuinely stranded, not busy.
+            recovered = await requeue_stale(db, shop.id, older_than_seconds=180)
+            if recovered:
+                await log(
+                    db, job, "warn",
+                    f"Recovered {recovered} item(s) stranded mid-generation and "
+                    f"returned them to the queue.",
+                )
+                await db.commit()
+                # Do not complete: the loop should come straight back for them.
+                return _step_result(
+                    "waiting", retry_after_ms=1000, next_step_ms=1000,
+                    key_hint=key_hint, lanes=lanes, job=job,
+                )
+
+            # Still-young GENERATING rows mean another caller (a second tab, or a
+            # colleague on the same shop) is mid-flight on the last item(s). Marking
+            # the job DONE here would end their run and drop those dishes from the
+            # catalogue, so wait for them instead of completing.
+            inflight = await db.scalar(
+                select(func.count())
+                .select_from(Item)
+                .where(Item.shop_id == shop.id, Item.status == ItemStatus.GENERATING)
+            )
+            if inflight:
+                await db.commit()
+                return _step_result(
+                    "waiting", retry_after_ms=5000, next_step_ms=5000,
+                    key_hint=key_hint, lanes=lanes, job=job,
+                )
+
+            job.status = JobStatus.DONE
+            job.finished_at = now
+            await db.commit()
+            return _step_result("complete", key_hint=key_hint, lanes=lanes, job=job)
+
+        # Commit the claim in its own transaction, separately from everything
+        # that follows. If the process dies anywhere below, this item is durably
+        # parked at GENERATING - never lost, never double-claimed - and
+        # requeue_stale() reclaims it once older_than_seconds has passed.
+        await db.commit()
+
         # Step 5: build the prompt. attempts > 0 means a previous call on
         # this same item already failed with NoImage, so use the fallback
         # ladder instead of the full prompt. Persist whichever was used.
@@ -488,17 +497,20 @@ async def generate_step(db: AsyncSession, job: Job, shop: Shop, user: User) -> d
             next_step_ms=0, key_hint=key_hint, lanes=lanes, job=job,
         )
     except Exception:
-        # Crash safety net: anything unexpected (storage I/O, a dangling
-        # reference image row, a non-typed SDK error - generate_one's own
-        # docstring says "any other exception ... propagates unchanged") must
-        # not strand the item at GENERATING. Put it straight back in the
-        # queue - not counted as failed, attempts untouched, since this was
-        # not a generation rejection - then let the exception surface to the
-        # caller (FastAPI will turn it into a 500; requeue_stale() is the
-        # remaining backstop if even this commit never runs). The lease is
-        # released the same way: an extra release is harmless, a missed one
-        # is not.
-        item.status = ItemStatus.QUEUED
+        # Crash safety net: covers everything from Step 3 (the claim) through
+        # Step 8, not just the generation call - a DB error while claiming,
+        # sweeping stale items, or checking for in-flight items must release
+        # the lease too, not just a failure inside generate_one. A claimed
+        # item goes straight back in the queue - not counted as failed,
+        # attempts untouched, since this was not a generation rejection -
+        # then the exception surfaces to the caller (FastAPI will turn it
+        # into a 500; requeue_stale() is the remaining backstop if even this
+        # commit never runs). `item` is still None when the failure happened
+        # before Step 3 claimed one, so there is nothing to requeue. The
+        # lease is released either way: an extra release is harmless, a
+        # missed one is not.
+        if item is not None:
+            item.status = ItemStatus.QUEUED
         await keypool.release_now(db, key_hash)
         await db.commit()
         raise

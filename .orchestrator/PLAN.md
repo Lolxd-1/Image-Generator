@@ -213,7 +213,7 @@ every return carries key_hint (the leased key) and lanes (keypool.lane_count(ena
 | AC3 | backend/tests/test_keypool.py :: test_wait_ms_until_ignores_disabled | T02 |
 | AC4,R2 | backend/tests/test_keypool.py :: test_expired_lease_counts_as_free | T02 |
 | AC1 | backend/tests/test_keypool.py :: test_lane_count_caps_at_max | T02 |
-| R5 | backend/tests/test_keypool.py :: test_legacy_migration_is_idempotent | T02 |
+| R5 | backend/tests/test_keypool.py :: test_migrate_legacy_keys_is_idempotent_by_construction | T02 |
 | AC7,AC9,R6 | backend/tests/test_storage_usage.py :: test_usage_sums_by_kind / test_purge_plan_lists_only_dish_keys | T05 |
 | AC8,R6 | backend/tests/test_storage_usage.py :: test_delete_plan_covers_every_object | T05 |
 | R4 | frontend typecheck plus the generateLoop 409 branch (reviewed) | T06 |

@@ -8,7 +8,6 @@ from passlib.context import CryptContext
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app import crypto
 from app.config import settings
 from app.db import get_db
 from app.errors import AppError
@@ -83,14 +82,3 @@ async def current_user(request: Request, db: AsyncSession = Depends(get_db)) -> 
     if user is None:
         raise AppError("unauthorized", "Not signed in.", status=401)
     return user
-
-
-def require_gemini_key(user: User) -> str:
-    """Return the caller's decrypted Gemini key, or raise no_api_key.
-
-    The returned plaintext must never be logged, returned, or persisted by
-    the caller — it exists only for the duration of the request.
-    """
-    if not user.gemini_key_enc:
-        raise AppError("no_api_key", "No Gemini API key is on file for this user.", status=400)
-    return crypto.decrypt(user.gemini_key_enc)

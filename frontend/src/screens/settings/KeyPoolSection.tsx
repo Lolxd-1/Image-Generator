@@ -238,13 +238,14 @@ export function KeyPoolSection() {
     }
 
     // MULTI-PASTE: sequential, not parallel — each add is a live Gemini
-    // validation call.
+    // validation call. The label field is ignored here (every key would
+    // otherwise get the same name) so the server auto-names each "Key {n}".
     setAdding(true);
     let added = 0;
     const failures: { hint: string; reason: string }[] = [];
     for (const key of parts) {
       try {
-        await addKey.mutateAsync({ key, label: label.trim() || undefined });
+        await addKey.mutateAsync({ key, label: undefined });
         added++;
       } catch (err) {
         failures.push({ hint: maskKey(key), reason: keyErrorMessage(err) });

@@ -135,8 +135,8 @@ function ShopStorageRow({ shop }: { shop: ShopStorage }) {
             {shop.dish_count === 1 ? "" : "s"}
           </p>
           <p className="text-xs text-base-500">
-            Dish {formatBytes(shop.dish_bytes)} · Menu {formatBytes(shop.menu_bytes)} · Reference{" "}
-            {formatBytes(shop.reference_bytes)} · Export {formatBytes(shop.export_bytes)}
+            Dish {formatBytes(shop.dish_bytes)} · Menu {shop.menu_count} (not counted) · Reference{" "}
+            {formatBytes(shop.reference_bytes)} · Export {shop.export_count} (not counted)
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -173,6 +173,9 @@ export function StorageSection() {
       ) : storageQ.data ? (
         <div className="flex flex-col gap-4">
           <UsageBar totalBytes={storageQ.data.total_bytes} budgetBytes={storageQ.data.budget_bytes} />
+          <p className="text-xs text-base-500">
+            Menu photos and exports are counted but not sized.
+          </p>
           {storageQ.data.shops.length === 0 ? (
             <EmptyState
               title="No shops yet"

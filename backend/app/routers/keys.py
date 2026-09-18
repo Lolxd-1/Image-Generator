@@ -12,6 +12,7 @@ from app.crypto import decrypt
 from app.db import get_db
 from app.engine import keypool, pacer
 from app.engine.gemini import VISION_MODEL, build_client, is_auth_error, is_rate_limit
+from app.engine.gemini import key_hash as gemini_key_hash
 from app.errors import AppError
 from app.models import ApiKey, PaceState, User
 from app.schemas import ApiKeyIn, ApiKeyOut, ApiKeyPatch
@@ -74,6 +75,14 @@ async def create_key(
     key = payload.key.strip()
     if not key:
         raise AppError("validation_failed", "Key is empty.", status=400)
+
+    h = gemini_key_hash(key)
+    existing = (
+        await db.execute(select(ApiKey).where(ApiKey.user_id == user.id, ApiKey.key_hash == h))
+    ).scalars().first()
+    if existing is not None:
+        raise AppError("conflict", "That key is already in the pool.", status=409)
+
     await anyio.to_thread.run_sync(_validate_live, key)
 
     if payload.label is not None:

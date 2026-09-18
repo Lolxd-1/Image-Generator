@@ -3,7 +3,7 @@
 /// own Gemini API key before entering the app.
 import { useState } from "react";
 import type { FormEvent } from "react";
-import { useNavigate } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import { ApiError } from "../api/client";
 import {
   useDeleteGeminiKey,
@@ -54,7 +54,8 @@ export default function Login() {
   }
 
   async function onRemoveKey() {
-    if (!window.confirm("Remove the stored Gemini key?")) return;
+    const count = me?.key_count ?? 0;
+    if (!window.confirm(`Remove all ${count} Gemini key(s)? This cannot be undone.`)) return;
     await deleteKey.mutateAsync();
   }
 
@@ -129,9 +130,12 @@ export default function Login() {
                     loading={deleteKey.isPending}
                     onClick={onRemoveKey}
                   >
-                    Remove
+                    Remove all keys
                   </Button>
                 </div>
+                <Link to="/settings" className="text-xs text-base-400 hover:underline">
+                  Manage the key pool in Settings
+                </Link>
                 <Button className="mt-2" onClick={() => navigate("/")}>
                   Continue
                 </Button>

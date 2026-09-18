@@ -58,8 +58,12 @@ class SupabaseStorage:
             except Exception:
                 # A missing object must not abort a delete that has already
                 # removed the DB rows that were the app's only reason to
-                # care about it.
-                logger.warning("delete_many: failed to remove a batch of %d objects", len(batch), exc_info=True)
+                # care about it - but an orphaned blob needs a searchable
+                # trace, so this is `error`, not `warning`.
+                logger.error(
+                    "delete_many: failed to remove a batch of %d objects, first key %s",
+                    len(batch), batch[0], exc_info=True,
+                )
 
         for i in range(0, len(keys), _DELETE_MANY_BATCH):
             batch = keys[i : i + _DELETE_MANY_BATCH]

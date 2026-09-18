@@ -18,6 +18,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import func, or_, select, update
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.crypto import decrypt, encrypt, key_hint
@@ -80,8 +81,10 @@ def lane_count(enabled: int) -> int:
     return min(max(enabled, 1), MAX_LANES)
 
 
-async def lease(db: AsyncSession, user_id: uuid.UUID) -> tuple[ApiKey, str] | None:
-    now = datetime.now(timezone.utc)
+def _lease_stmt(user_id: uuid.UUID, now: datetime):
+    """The single UPDATE ... RETURNING statement `lease` executes, pulled out
+    so a test can compile it and assert its shape (FOR UPDATE OF pace_state
+    SKIP LOCKED) without ever needing a DB."""
     candidate = (
         select(PaceState.api_key_hash)
         .join(ApiKey, ApiKey.key_hash == PaceState.api_key_hash)
@@ -95,14 +98,18 @@ async def lease(db: AsyncSession, user_id: uuid.UUID) -> tuple[ApiKey, str] | No
         .with_for_update(skip_locked=True, of=PaceState)
         .limit(1)
     )
-    stmt = (
+    return (
         update(PaceState)
         .where(PaceState.api_key_hash == candidate.scalar_subquery())
         .values(leased_until=now + timedelta(seconds=LEASE_SECONDS))
         .returning(PaceState.api_key_hash)
         .execution_options(synchronize_session=False)
     )
-    leased_hash = (await db.execute(stmt)).scalars().first()
+
+
+async def lease(db: AsyncSession, user_id: uuid.UUID) -> tuple[ApiKey, str] | None:
+    now = datetime.now(timezone.utc)
+    leased_hash = (await db.execute(_lease_stmt(user_id, now))).scalars().first()
     if leased_hash is None:
         await db.commit()
         return None
@@ -112,6 +119,13 @@ async def lease(db: AsyncSession, user_id: uuid.UUID) -> tuple[ApiKey, str] | No
             select(ApiKey).where(ApiKey.key_hash == leased_hash, ApiKey.user_id == user_id)
         )
     ).scalars().first()
+    if key_row is None:
+        # The ApiKey row vanished between the lease UPDATE and this SELECT
+        # (a concurrent delete) - give the lease back rather than raising on
+        # a None dereference below, which would otherwise leak it for
+        # LEASE_SECONDS.
+        await release_now(db, leased_hash)
+        return None
     key_row.last_used_at = now
     await db.commit()
     return key_row, decrypt(key_row.key_enc)
@@ -135,10 +149,15 @@ async def release_now(db: AsyncSession, key_hash: str) -> None:
 
 
 async def wait_ms(db: AsyncSession, user_id: uuid.UUID) -> int | None:
+    # INNER join, matching `lease`'s candidate set: a key with no pace_state
+    # row is never a lease candidate (add_key/migrate_legacy_keys always
+    # create one), so it must not be a wait_ms candidate either - otherwise
+    # it would report "free now" while lease can never actually pick it,
+    # looping a lane forever.
     rows = (
         await db.execute(
             select(ApiKey, PaceState)
-            .outerjoin(PaceState, PaceState.api_key_hash == ApiKey.key_hash)
+            .join(PaceState, PaceState.api_key_hash == ApiKey.key_hash)
             .where(ApiKey.user_id == user_id)
         )
     ).all()
@@ -146,8 +165,8 @@ async def wait_ms(db: AsyncSession, user_id: uuid.UUID) -> int | None:
         Candidate(
             key_hash=key.key_hash,
             enabled=key.enabled,
-            next_allowed_at=pace.next_allowed_at if pace else None,
-            leased_until=pace.leased_until if pace else None,
+            next_allowed_at=pace.next_allowed_at,
+            leased_until=pace.leased_until,
             last_used_at=key.last_used_at,
         )
         for key, pace in rows
@@ -192,8 +211,17 @@ async def add_key(db: AsyncSession, user_id: uuid.UUID, plain: str, label: str) 
         key_hash=h,
     )
     db.add(key_row)
-    await pacer.get_or_create(db, h)
-    await db.commit()
+    try:
+        # get_or_create's own flush() can also hit the race below (the same
+        # key_hash means the same pace_state PK too), so it must be inside
+        # this try along with the commit.
+        await pacer.get_or_create(db, h)
+        await db.commit()
+    except IntegrityError:
+        # A concurrent add of the same key raced past the check above and
+        # hit uq_api_keys_user_key - report it the same way as the check.
+        await db.rollback()
+        raise AppError("conflict", "That key is already in the pool.", status=409)
     return key_row
 
 

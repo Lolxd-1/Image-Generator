@@ -87,7 +87,11 @@ export default function Generate() {
   const failed = progressed > 0 || loop.running ? loop.failed : jobQ.data?.failed ?? 0;
   const total = jobQ.data?.total ?? done + failed + loop.remaining;
   const remaining = loop.running || progressed > 0 ? loop.remaining : Math.max(total - done - failed, 0);
-  const eta = loop.waitMs !== null ? Math.round((loop.waitMs * remaining) / 1000 / lanes) : null;
+  // Divide by the lanes actually running once the loop is running (the
+  // server may have grown/shrunk it from the key-derived estimate);
+  // `|| lanes` only matters before start, when loop.lanes is still 0.
+  const etaLanes = loop.running ? loop.lanes || lanes : lanes;
+  const eta = loop.waitMs !== null ? Math.round((loop.waitMs * remaining) / 1000 / etaLanes) : null;
 
   const items = (itemsQ.data?.items ?? [])
     .filter((i) => ACTIVE_STATUSES.has(i.status))
