@@ -8,15 +8,15 @@ updated: 2026-09-18T08:40:00Z · Claude Code / Opus 5
 <!-- status: recon | planning | awaiting-approval | executing | integrating | done | blocked -->
 
 ## NEXT ACTION
-Dispatch T01 (models + leased_until + schemas).
+Gate T02, then review it (high risk), then dispatch T03.
 
 ## Baseline
 `cd backend && python -m pytest -q && cd ../frontend && npx tsc --noEmit` -> exit 0.
 95 passed in 155s, typecheck clean. No pre-existing failures.
 
 ## Tasks
-- [ ] T01 api_keys table, leased_until, schemas — w1 — deps none
-- [ ] T02 keypool engine + tests — w2 — deps T01
+- [x] T01 api_keys table, leased_until, schemas — w1 — done e0f7451..78e8dc6 (gate PASS)
+- [~] T02 keypool engine + tests — w2 — deps T01
 - [ ] T03 keys router, /me, boot backfill — w3 — deps T02
 - [ ] T04 route generate_step through the pool — w4 — deps T02
 - [ ] T05 storage usage, purge, delete catalog — w5 — deps T01
