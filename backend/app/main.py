@@ -32,6 +32,16 @@ async def lifespan(app: FastAPI):
     async with async_session_maker() as session:
         await seed_users(session)
 
+        # Migrate any single-key users into the pool so nothing breaks on
+        # deploy. Unlike seeding, a failed backfill must not stop the app from
+        # booting - the operator can still re-add keys in Settings.
+        from app.engine import keypool
+
+        try:
+            await keypool.migrate_legacy_keys(session)
+        except Exception:
+            logger.warning("migrate_legacy_keys failed at boot", exc_info=True)
+
     yield
 
 
@@ -50,6 +60,7 @@ app.add_exception_handler(AppError, app_error_handler)
 # production would start a healthy-looking app with half its API silently
 # absent, surfacing as mystery 404s. Fail loudly at boot instead.
 from app.routers.auth import router as auth_router
+from app.routers.keys import router as keys_router
 from app.routers.shops import router as shops_router
 from app.routers.items import router as items_router
 from app.routers.images import router as images_router
@@ -59,7 +70,7 @@ from app.routers.export import router as export_router
 # One convention: routers declare paths RELATIVE to /api, and are mounted
 # here at /api. A router that also self-prefixes with /api produces
 # /api/api/... and every frontend call to it 404s.
-for _router in (auth_router, shops_router, items_router,
+for _router in (auth_router, keys_router, shops_router, items_router,
                 images_router, jobs_router, export_router):
     app.include_router(_router, prefix="/api")
 

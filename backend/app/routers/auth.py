@@ -1,12 +1,13 @@
 """Auth routes: login, logout, current-user info, and Gemini key management."""
 from datetime import datetime, timezone
 
+import anyio
 from fastapi import APIRouter, Depends, Request, Response
 from pydantic import BaseModel
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app import crypto, throttle
+from app import throttle
 from app.auth import (
     DUMMY_PASSWORD_HASH,
     current_user,
@@ -15,9 +16,11 @@ from app.auth import (
     verify_password,
 )
 from app.db import get_db
-from app.engine.gemini import VISION_MODEL, build_client, is_auth_error, is_rate_limit
+from app.engine import keypool
+from app.engine.gemini import key_hash as gemini_key_hash
 from app.errors import AppError
-from app.models import User
+from app.models import ApiKey, User
+from app.routers.keys import _validate_live
 from app.schemas import GeminiKeyIn, GeminiKeyOut, LoginIn, MeOut, UserOut
 
 router = APIRouter(prefix="/auth", tags=["auth"])
@@ -31,11 +34,27 @@ class LoginOut(BaseModel):
     user: UserOut
 
 
-def _me_out(user: User) -> MeOut:
+async def _me_out(db: AsyncSession, user: User) -> MeOut:
+    key_count = await db.scalar(
+        select(func.count()).select_from(ApiKey).where(ApiKey.user_id == user.id)
+    )
+    enabled_key_count = await db.scalar(
+        select(func.count()).select_from(ApiKey).where(ApiKey.user_id == user.id, ApiKey.enabled.is_(True))
+    )
+    oldest_enabled = (
+        await db.execute(
+            select(ApiKey)
+            .where(ApiKey.user_id == user.id, ApiKey.enabled.is_(True))
+            .order_by(ApiKey.created_at)
+            .limit(1)
+        )
+    ).scalars().first()
     return MeOut(
         user=UserOut.model_validate(user),
-        has_gemini_key=bool(user.gemini_key_enc),
-        gemini_key_hint=user.gemini_key_hint,
+        has_gemini_key=enabled_key_count > 0,
+        gemini_key_hint=oldest_enabled.key_hint if oldest_enabled else None,
+        key_count=key_count,
+        enabled_key_count=enabled_key_count,
     )
 
 
@@ -85,8 +104,8 @@ async def logout(response: Response, user: User = Depends(current_user)) -> Resp
 
 
 @router.get("/me", response_model=MeOut)
-async def me(user: User = Depends(current_user)) -> MeOut:
-    return _me_out(user)
+async def me(user: User = Depends(current_user), db: AsyncSession = Depends(get_db)) -> MeOut:
+    return await _me_out(db, user)
 
 
 @router.put("/gemini-key", response_model=GeminiKeyOut)
@@ -97,31 +116,27 @@ async def put_gemini_key(
 
     # Validate with a real, tiny live call before persisting anything —
     # never trust a key we haven't exercised against the API.
-    try:
-        client = build_client(key)
-        client.models.generate_content(model=VISION_MODEL, contents="ping")
-    except Exception as exc:  # noqa: BLE001 - genai raises plain Exception subtypes
-        msg = str(exc)
-        if is_auth_error(msg):
-            raise AppError("auth_failure", "Gemini rejected this API key.", status=400)
-        if is_rate_limit(msg):
-            raise AppError("rate_limited", "Gemini is rate-limiting validation calls; try again shortly.", status=429)
-        # SPEC-GAP: SPEC.md only defines the auth_failure outcome for this
-        # validation call. Any other failure (network, unexpected response
-        # shape, etc.) is surfaced as validation_failed rather than silently
-        # storing an unverified key. The raw exception text is not included
-        # in the response to avoid ever echoing key material back.
-        raise AppError("validation_failed", "Could not validate the Gemini key.", status=400)
+    await anyio.to_thread.run_sync(_validate_live, key)
 
-    user.gemini_key_enc = crypto.encrypt(key)
-    user.gemini_key_hint = crypto.key_hint(key)
-    await db.commit()
-    await db.refresh(user)
-    return GeminiKeyOut(has_gemini_key=True, gemini_key_hint=user.gemini_key_hint)
+    try:
+        key_row = await keypool.add_key(db, user.id, key, "Primary")
+    except AppError as exc:
+        if exc.code != "conflict":
+            raise
+        # The key is already in the pool from an earlier call — not an error
+        # for this legacy endpoint, which only promises "a key is on file".
+        h = gemini_key_hash(key)
+        key_row = (
+            await db.execute(select(ApiKey).where(ApiKey.user_id == user.id, ApiKey.key_hash == h))
+        ).scalars().first()
+    return GeminiKeyOut(has_gemini_key=True, gemini_key_hint=key_row.key_hint)
 
 
 @router.delete("/gemini-key", status_code=204)
 async def delete_gemini_key(user: User = Depends(current_user), db: AsyncSession = Depends(get_db)) -> Response:
+    rows = (await db.execute(select(ApiKey).where(ApiKey.user_id == user.id))).scalars().all()
+    for row in rows:
+        await keypool.delete_key(db, row)
     user.gemini_key_enc = None
     user.gemini_key_hint = None
     await db.commit()
