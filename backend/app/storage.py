@@ -1,4 +1,5 @@
 """Object storage abstraction: a Supabase bucket in prod, local filesystem for tests."""
+import logging
 from functools import lru_cache
 from pathlib import Path
 from typing import Protocol
@@ -7,11 +8,16 @@ import anyio
 
 from app.config import settings
 
+logger = logging.getLogger(__name__)
+
+_DELETE_MANY_BATCH = 100
+
 
 class Storage(Protocol):
     async def put(self, key: str, data: bytes, content_type: str) -> None: ...
     async def get(self, key: str) -> bytes: ...
     async def delete(self, key: str) -> None: ...
+    async def delete_many(self, keys: list[str]) -> None: ...
 
 
 class SupabaseStorage:
@@ -44,6 +50,20 @@ class SupabaseStorage:
             self._client.storage.from_(self._bucket).remove([key])
 
         await anyio.to_thread.run_sync(_delete)
+
+    async def delete_many(self, keys: list[str]) -> None:
+        def _delete_batch(batch: list[str]) -> None:
+            try:
+                self._client.storage.from_(self._bucket).remove(batch)
+            except Exception:
+                # A missing object must not abort a delete that has already
+                # removed the DB rows that were the app's only reason to
+                # care about it.
+                logger.warning("delete_many: failed to remove a batch of %d objects", len(batch), exc_info=True)
+
+        for i in range(0, len(keys), _DELETE_MANY_BATCH):
+            batch = keys[i : i + _DELETE_MANY_BATCH]
+            await anyio.to_thread.run_sync(_delete_batch, batch)
 
 
 class LocalStorage:
@@ -78,6 +98,15 @@ class LocalStorage:
                 path.unlink()
 
         await anyio.to_thread.run_sync(_delete)
+
+    async def delete_many(self, keys: list[str]) -> None:
+        def _delete_all() -> None:
+            for key in keys:
+                path = self._path(key)
+                if path.exists():
+                    path.unlink()
+
+        await anyio.to_thread.run_sync(_delete_all)
 
 
 @lru_cache(maxsize=1)

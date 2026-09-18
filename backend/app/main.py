@@ -66,12 +66,13 @@ from app.routers.items import router as items_router
 from app.routers.images import router as images_router
 from app.routers.jobs import router as jobs_router
 from app.routers.export import router as export_router
+from app.routers.storage import router as storage_router
 
 # One convention: routers declare paths RELATIVE to /api, and are mounted
 # here at /api. A router that also self-prefixes with /api produces
 # /api/api/... and every frontend call to it 404s.
 for _router in (auth_router, keys_router, shops_router, items_router,
-                images_router, jobs_router, export_router):
+                images_router, jobs_router, export_router, storage_router):
     app.include_router(_router, prefix="/api")
 
 
