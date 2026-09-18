@@ -8,8 +8,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import stepper
 from app.auth import current_user
-from app.crypto import decrypt
 from app.db import get_db
+from app.engine import keypool
 from app.enums import ItemStatus, JobKind, JobStatus
 from app.errors import AppError
 from app.models import Item, Job, JobEvent, Shop, User
@@ -49,9 +49,7 @@ async def create_job(
         return await stepper.start_job(db, shop, user, kind)
 
     if kind in (JobKind.EXTRACT, JobKind.CLASSIFY):
-        if not user.gemini_key_enc:
-            raise AppError("no_api_key", "No Gemini API key configured.", status=400)
-        api_key = decrypt(user.gemini_key_enc)
+        api_key = await keypool.pick_any(db, user.id)
         job = await stepper.start_job(db, shop, user, kind)
         if kind == JobKind.EXTRACT:
             await stepper.run_extract(db, job, shop, api_key)
@@ -137,7 +135,4 @@ async def cancel_job(job_id: uuid.UUID, db: AsyncSession = Depends(get_db), user
 async def step_job(job_id: uuid.UUID, db: AsyncSession = Depends(get_db), user: User = Depends(current_user)) -> dict:
     job = await _load_job(db, job_id)
     shop = await _load_shop(db, job.shop_id)
-    if not user.gemini_key_enc:
-        raise AppError("no_api_key", "No Gemini API key configured.", status=400)
-    api_key = decrypt(user.gemini_key_enc)
-    return await stepper.generate_step(db, job, shop, api_key)
+    return await stepper.generate_step(db, job, shop, user)

@@ -10,8 +10,9 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import crypto
-from app.auth import current_user, require_gemini_key
+from app.auth import current_user
 from app.db import get_db
+from app.engine import keypool
 from app.engine.gemini import build_client
 from app.engine.prompt import derive_style_profile
 from app.enums import ImageKind
@@ -140,7 +141,7 @@ async def upload_reference(
     storage_key = f"shops/{shop_id}/{ImageKind.REFERENCE.value}/{image_id}.jpg"
     await get_storage().put(storage_key, jpeg, "image/jpeg")
 
-    api_key = require_gemini_key(user)
+    api_key = await keypool.pick_any(db, user.id)
     client = build_client(api_key)
     try:
         style_profile = derive_style_profile(client, jpeg)

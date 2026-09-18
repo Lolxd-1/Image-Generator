@@ -14,7 +14,7 @@ from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.crypto import decrypt
-from app.engine import classify, export, extract, gemini, generate, imgbb, pacer, prompt
+from app.engine import classify, export, extract, gemini, generate, imgbb, keypool, pacer, prompt
 from app.enums import ImageKind, ItemStatus, JobKind, JobStatus
 from app.errors import AppError
 from app.models import Export, Image, Item, Job, JobEvent, MenuUpload, Shop, User
@@ -208,7 +208,27 @@ async def start_job(db: AsyncSession, shop: Shop, user: User, kind: JobKind) -> 
 # ---------------------------------------------------------------------------
 
 
-async def generate_step(db: AsyncSession, job: Job, shop: Shop, api_key: str) -> dict[str, Any]:
+def _step_result(status, *, item=None, next_delay_ms=None, retry_after_ms=None,
+                  next_step_ms=0, key_hint=None, lanes=1, job) -> dict[str, Any]:
+    """Build one `generate_step` return dict. Routing every `return` through
+    this (rather than a dict literal per branch) means no return path can
+    forget `next_step_ms`/`key_hint`/`lanes` or the `remaining`/`done`/`failed`
+    counters, which every branch must carry."""
+    return {
+        "status": status,
+        "item": item,
+        "next_delay_ms": next_delay_ms,
+        "retry_after_ms": retry_after_ms,
+        "remaining": _remaining(job),
+        "done": job.done,
+        "failed": job.failed,
+        "next_step_ms": next_step_ms,
+        "key_hint": key_hint,
+        "lanes": lanes,
+    }
+
+
+async def generate_step(db: AsyncSession, job: Job, shop: Shop, user: User) -> dict[str, Any]:
     """Advance one `generate` job by exactly one item. See SPEC.md §6.
 
     `status` in the returned dict is one of the six values SPEC.md pins down:
@@ -217,6 +237,18 @@ async def generate_step(db: AsyncSession, job: Job, shop: Shop, api_key: str) ->
     single bad dish must never stop the loop, so any per-item problem (a
     blocked prompt that never clears, or a missing reference image) reports
     `item_failed` and leaves the job RUNNING.
+
+    The pace gate (SPEC.md's Step 2) is now a per-key LEASE (app.engine.
+    keypool): each call leases one free, enabled key out of the user's pool
+    instead of gating on a single key's own pace, so K concurrent callers can
+    run on K different keys. `next_delay_ms` stays the per-KEY pace (how long
+    the key this call used should wait before its next use); `next_step_ms`
+    is the per-LANE wait (how soon the caller should retry /step at all),
+    which is usually much shorter since another key in the pool may already
+    be free. An AuthFailure now disables just the one key that produced it
+    (`keypool.disable`) instead of failing the whole job - the run continues
+    on the user's other enabled keys, and only the job itself fails once none
+    remain.
     """
     # Step 1: job must be RUNNING. Re-fetch: the `job` the caller passed in
     # may be stale if a second tab/request changed it since it was loaded.
@@ -233,27 +265,26 @@ async def generate_step(db: AsyncSession, job: Job, shop: Shop, api_key: str) ->
     if job.kind != JobKind.GENERATE:
         raise AppError("job_not_running", "This job does not use the step loop.", status=409)
 
-    key_hash = gemini.key_hash(api_key)
-    if not job.api_key_hash:
-        job.api_key_hash = key_hash
-
     now = datetime.now(timezone.utc)
 
-    # Step 2 (SPEC.md numbering: pace gate). Read PaceState; do NOT claim an
-    # item while paced.
-    pace = await pacer.get_or_create(db, key_hash)
-    if pace.next_allowed_at is not None and pace.next_allowed_at > now:
-        retry_after_ms = max(int((pace.next_allowed_at - now).total_seconds() * 1000), 0)
-        await db.commit()
-        return {
-            "status": "waiting",
-            "item": None,
-            "next_delay_ms": None,
-            "retry_after_ms": retry_after_ms,
-            "remaining": _remaining(job),
-            "done": job.done,
-            "failed": job.failed,
-        }
+    # Step 2 (SPEC.md numbering: pace gate) -> a per-key lease. Do NOT claim
+    # an item until a key is actually leased.
+    lanes = keypool.lane_count(await keypool.enabled_count(db, user.id))
+    leased = await keypool.lease(db, user.id)
+    if leased is None:
+        w = await keypool.wait_ms(db, user.id)
+        if w is None:            # no enabled key at all -> the job cannot continue
+            job.status = JobStatus.FAILED
+            job.error = "No enabled Gemini API key. Add one in Settings."
+            job.finished_at = datetime.now(timezone.utc)
+            await db.commit()
+            await log(db, job, "error", job.error)
+            return _step_result("failed", job=job, lanes=lanes)
+        wait = max(w, 250)
+        return _step_result("waiting", retry_after_ms=wait, next_step_ms=wait, job=job, lanes=lanes)
+    key_row, api_key = leased
+    key_hash, key_hint = key_row.key_hash, key_row.key_hint
+    job.api_key_hash = key_hash  # informational only: records the LAST key used
 
     # Step 3: atomically claim ONE item. A single UPDATE ... RETURNING driven
     # by a FOR UPDATE SKIP LOCKED subquery, so two concurrent callers (two
@@ -283,6 +314,10 @@ async def generate_step(db: AsyncSession, job: Job, shop: Shop, api_key: str) ->
     # otherwise a single crashed step would silently drop that dish from the
     # catalogue and the run would report "complete" while being one image short.
     if item is None:
+        # No item claimed with this leased key -> give it back before doing
+        # anything else, so it is immediately available to the next caller.
+        await keypool.release_now(db, key_hash)
+
         # A step request cannot outlive gemini.API_TIMEOUT (90s) by much, so
         # anything at GENERATING for 3 minutes is genuinely stranded, not busy.
         recovered = await requeue_stale(db, shop.id, older_than_seconds=180)
@@ -294,15 +329,7 @@ async def generate_step(db: AsyncSession, job: Job, shop: Shop, api_key: str) ->
             )
             await db.commit()
             # Do not complete: the loop should come straight back for them.
-            return {
-                "status": "waiting",
-                "item": None,
-                "next_delay_ms": None,
-                "retry_after_ms": 1000,
-                "remaining": _remaining(job),
-                "done": job.done,
-                "failed": job.failed,
-            }
+            return _step_result("waiting", retry_after_ms=1000, next_step_ms=1000, lanes=lanes, job=job)
 
         # Still-young GENERATING rows mean another caller (a second tab, or a
         # colleague on the same shop) is mid-flight on the last item(s). Marking
@@ -315,28 +342,12 @@ async def generate_step(db: AsyncSession, job: Job, shop: Shop, api_key: str) ->
         )
         if inflight:
             await db.commit()
-            return {
-                "status": "waiting",
-                "item": None,
-                "next_delay_ms": None,
-                "retry_after_ms": 5000,
-                "remaining": _remaining(job),
-                "done": job.done,
-                "failed": job.failed,
-            }
+            return _step_result("waiting", retry_after_ms=5000, next_step_ms=5000, lanes=lanes, job=job)
 
         job.status = JobStatus.DONE
         job.finished_at = now
         await db.commit()
-        return {
-            "status": "complete",
-            "item": None,
-            "next_delay_ms": None,
-            "retry_after_ms": None,
-            "remaining": 0,
-            "done": job.done,
-            "failed": job.failed,
-        }
+        return _step_result("complete", lanes=lanes, job=job)
 
     # Commit the claim in its own transaction, separately from everything
     # that follows. If the process dies anywhere below, this item is durably
@@ -370,17 +381,13 @@ async def generate_step(db: AsyncSession, job: Job, shop: Shop, api_key: str) ->
             item.status = ItemStatus.FAILED
             item.last_error = "no reference image configured for this shop or item"
             job.failed += 1
+            await keypool.release_now(db, key_hash)
             await db.commit()
             await log(db, job, "error", item.last_error, item.id)
-            return {
-                "status": "item_failed",
-                "item": _step_item(item),
-                "next_delay_ms": int(pace.delay_s * 1000),
-                "retry_after_ms": None,
-                "remaining": _remaining(job),
-                "done": job.done,
-                "failed": job.failed,
-            }
+            return _step_result(
+                "item_failed", item=_step_item(item), next_step_ms=0,
+                key_hint=key_hint, lanes=lanes, job=job,
+            )
         ref_jpeg = await _get_ref_bytes(db, ref_image_id)
 
         # Step 7: call generate_one exactly once. No loop, no sleep here.
@@ -389,39 +396,41 @@ async def generate_step(db: AsyncSession, job: Job, shop: Shop, api_key: str) ->
             raw = await asyncio.to_thread(generate.generate_one, client, prompt_text, ref_jpeg)
         except gemini.RateLimited as e:
             # Step 7 outcome: back to the queue, not counted as failed,
-            # attempts untouched.
+            # attempts untouched. Only THIS key's pace backs off; release it
+            # to the pool at that backoff and wait only for the pool's
+            # soonest free key (usually much sooner than this key's own).
             item.status = ItemStatus.QUEUED
             wait_s = await pacer.on_rate_limit(db, key_hash)
+            await keypool.release(db, key_hash, wait_s)
             await db.commit()
             await log(db, job, "warn", f"rate limited: {e}", item.id)
-            return {
-                "status": "rate_limited",
-                "item": _step_item(item),
-                "next_delay_ms": None,
-                "retry_after_ms": int(wait_s * 1000),
-                "remaining": _remaining(job),
-                "done": job.done,
-                "failed": job.failed,
-            }
+            w = await keypool.wait_ms(db, user.id)
+            wait = max(w if w is not None else int(wait_s * 1000), 250)
+            return _step_result(
+                "rate_limited", item=_step_item(item), retry_after_ms=wait,
+                next_step_ms=wait, key_hint=key_hint, lanes=lanes, job=job,
+            )
         except gemini.AuthFailure as e:
-            # Step 9: the WHOLE job dies. Hand the item back to the queue so
-            # it is not stranded once the key is fixed and generation resumes.
+            # This key is bad - disable just it and hand the item back to the
+            # queue so it is not stranded. The job only dies (Step 9) once no
+            # enabled key remains; otherwise the run continues on the others.
             item.status = ItemStatus.QUEUED
             item.last_error = f"auth failure: {e}"
-            job.status = JobStatus.FAILED
-            job.error = str(e)[:500]
-            job.finished_at = datetime.now(timezone.utc)
-            await db.commit()
-            await log(db, job, "error", f"auth failure: {e}", item.id)
-            return {
-                "status": "failed",
-                "item": _step_item(item),
-                "next_delay_ms": None,
-                "retry_after_ms": None,
-                "remaining": _remaining(job),
-                "done": job.done,
-                "failed": job.failed,
-            }
+            await keypool.disable(db, key_hash, str(e)[:300])
+            await log(db, job, "error", f"API key {key_hint} disabled: {e}", item.id)
+            remaining_keys = await keypool.enabled_count(db, user.id)
+            if remaining_keys == 0:
+                job.status = JobStatus.FAILED
+                job.error = str(e)[:500]
+                job.finished_at = datetime.now(timezone.utc)
+                await db.commit()
+                return _step_result(
+                    "failed", item=_step_item(item), key_hint=key_hint, lanes=lanes, job=job,
+                )
+            return _step_result(
+                "waiting", item=_step_item(item), retry_after_ms=250, next_step_ms=250,
+                key_hint=key_hint, lanes=keypool.lane_count(remaining_keys), job=job,
+            )
         except gemini.NoImage as e:
             # Step 8: increment attempts; retry via the fallback ladder up to
             # 3 times, then this one item - and only this item - fails.
@@ -437,17 +446,14 @@ async def generate_step(db: AsyncSession, job: Job, shop: Shop, api_key: str) ->
             else:
                 item.status = ItemStatus.FAILED
                 job.failed += 1
+            pace_delay = (await pacer.get_or_create(db, key_hash)).delay_s
+            await keypool.release(db, key_hash, pace_delay)
             await db.commit()
             await log(db, job, "warn", f"no image (attempt {item.attempts}): {e}", item.id)
-            return {
-                "status": "item_failed",
-                "item": _step_item(item),
-                "next_delay_ms": int(pace.delay_s * 1000),
-                "retry_after_ms": None,
-                "remaining": _remaining(job),
-                "done": job.done,
-                "failed": job.failed,
-            }
+            return _step_result(
+                "item_failed", item=_step_item(item), next_delay_ms=int(pace_delay * 1000),
+                next_step_ms=0, key_hint=key_hint, lanes=lanes, job=job,
+            )
 
         # Step 6 (success branch of SPEC.md's numbering): store bytes, mark
         # generated, advance pacing.
@@ -473,17 +479,13 @@ async def generate_step(db: AsyncSession, job: Job, shop: Shop, api_key: str) ->
         item.last_error = None
         job.done += 1
         next_delay_s = await pacer.on_success(db, key_hash)
+        await keypool.release(db, key_hash, next_delay_s)
         await db.commit()
         await log(db, job, "info", f"generated '{item.name}'", item.id)
-        return {
-            "status": "generated",
-            "item": _step_item(item),
-            "next_delay_ms": int(next_delay_s * 1000),
-            "retry_after_ms": None,
-            "remaining": _remaining(job),
-            "done": job.done,
-            "failed": job.failed,
-        }
+        return _step_result(
+            "generated", item=_step_item(item), next_delay_ms=int(next_delay_s * 1000),
+            next_step_ms=0, key_hint=key_hint, lanes=lanes, job=job,
+        )
     except Exception:
         # Crash safety net: anything unexpected (storage I/O, a dangling
         # reference image row, a non-typed SDK error - generate_one's own
@@ -492,8 +494,11 @@ async def generate_step(db: AsyncSession, job: Job, shop: Shop, api_key: str) ->
         # queue - not counted as failed, attempts untouched, since this was
         # not a generation rejection - then let the exception surface to the
         # caller (FastAPI will turn it into a 500; requeue_stale() is the
-        # remaining backstop if even this commit never runs).
+        # remaining backstop if even this commit never runs). The lease is
+        # released the same way: an extra release is harmless, a missed one
+        # is not.
         item.status = ItemStatus.QUEUED
+        await keypool.release_now(db, key_hash)
         await db.commit()
         raise
 
