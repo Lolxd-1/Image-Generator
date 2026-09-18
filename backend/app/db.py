@@ -1,12 +1,16 @@
 """Async SQLAlchemy engine, session factory, declarative base, and FastAPI DB dependency."""
+import logging
 from collections.abc import AsyncGenerator
 from uuid import uuid4
 
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import DeclarativeBase
 from sqlalchemy.pool import NullPool
 
 from app.config import settings
+
+logger = logging.getLogger(__name__)
 
 
 class Base(DeclarativeBase):
@@ -60,3 +64,15 @@ async def init_models() -> None:
     # No Alembic by design (SPEC.md §2): one deployment, one schema owner.
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+
+    # create_all never adds a column to a table that already exists, and a
+    # deployed instance already has pace_state; a hard failure here would
+    # take the app down at boot on a database we cannot migrate, which is
+    # worse than running without the column.
+    try:
+        async with engine.begin() as conn:
+            await conn.execute(
+                text("ALTER TABLE pace_state ADD COLUMN IF NOT EXISTS leased_until TIMESTAMPTZ")
+            )
+    except Exception:
+        logger.warning("failed to add pace_state.leased_until column", exc_info=True)

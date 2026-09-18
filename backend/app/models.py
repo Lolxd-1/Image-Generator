@@ -33,6 +33,22 @@ class User(Base):
     last_login_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
+class ApiKey(Base):
+    __tablename__ = "api_keys"
+    __table_args__ = (UniqueConstraint("user_id", "key_hash", name="uq_api_keys_user_key"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id"), index=True)
+    label: Mapped[str] = mapped_column(String, default="")
+    key_enc: Mapped[str] = mapped_column(String)
+    key_hint: Mapped[str] = mapped_column(String)
+    key_hash: Mapped[str] = mapped_column(String, index=True)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    disabled_reason: Mapped[str | None] = mapped_column(String, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    last_used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
 class Shop(Base):
     __tablename__ = "shops"
 
@@ -176,6 +192,8 @@ class PaceState(Base):
     api_key_hash: Mapped[str] = mapped_column(String, primary_key=True)
     delay_s: Mapped[float] = mapped_column(Float, default=30.0)
     next_allowed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # Concurrency lease held by an in-flight /step call for this key.
+    leased_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     consecutive_429: Mapped[int] = mapped_column(Integer, default=0)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()

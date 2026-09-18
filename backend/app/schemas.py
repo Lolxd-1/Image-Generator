@@ -34,6 +34,33 @@ class MeOut(BaseModel):
     user: UserOut
     has_gemini_key: bool
     gemini_key_hint: str | None = None
+    key_count: int = 0
+    enabled_key_count: int = 0
+
+
+class ApiKeyIn(BaseModel):
+    key: str
+    label: str | None = None
+
+
+class ApiKeyPatch(BaseModel):
+    label: str | None = None
+    enabled: bool | None = None
+
+
+class ApiKeyOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    label: str
+    key_hint: str
+    enabled: bool
+    disabled_reason: str | None = None
+    created_at: datetime
+    last_used_at: datetime | None = None
+    delay_s: float = 30.0                     # from the key's PaceState
+    next_allowed_at: datetime | None = None   # from the key's PaceState
+    busy: bool = False                        # PaceState.leased_until is in the future
 
 
 # --- shops ----------------------------------------------------------------
@@ -224,6 +251,9 @@ class StepResult(BaseModel):
     remaining: int | None = None
     done: int | None = None
     failed: int | None = None
+    next_step_ms: int = 0
+    key_hint: str | None = None
+    lanes: int = 1
 
 
 # --- images ---------------------------------------------------------------
@@ -241,6 +271,32 @@ class ImageOut(BaseModel):
     width: int | None = None
     height: int | None = None
     created_at: datetime
+
+
+# --- storage ----------------------------------------------------------------
+
+class ShopStorageOut(BaseModel):
+    shop_id: uuid.UUID
+    shop_name: str
+    dish_bytes: int = 0
+    dish_count: int = 0
+    menu_bytes: int = 0
+    menu_count: int = 0
+    reference_bytes: int = 0
+    export_bytes: int = 0
+    export_count: int = 0
+    total_bytes: int = 0
+
+
+class StorageUsageOut(BaseModel):
+    total_bytes: int = 0
+    budget_bytes: int = 1_073_741_824
+    shops: list[ShopStorageOut] = []
+
+
+class PurgeResultOut(BaseModel):
+    deleted_images: int = 0
+    bytes_freed: int = 0
 
 
 # --- export -----------------------------------------------------------------
