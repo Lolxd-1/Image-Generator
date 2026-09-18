@@ -9,6 +9,8 @@ import {
 } from "@tanstack/react-query";
 import { del, get, patch, post, postForm, put } from "./client";
 import type {
+  AddKeyPayload,
+  ApiKey,
   CreateShopPayload,
   ExportRecord,
   GeminiKeyResponse,
@@ -22,12 +24,16 @@ import type {
   MeResponse,
   MenuUpload,
   Paginated,
+  PurgeResult,
   ReferenceUploadResponse,
   RowError,
   SetKeyPayload,
   Shop,
+  ShopStorage,
   ShopSummary,
+  StorageUsage,
   UpdateItemPayload,
+  UpdateKeyPayload,
   UpdateShopPayload,
 } from "./types";
 
@@ -37,6 +43,7 @@ import type {
 
 export const qk = {
   me: ["auth", "me"] as const,
+  keys: ["auth", "keys"] as const,
   shops: ["shops"] as const,
   shop: (id: string) => ["shops", id] as const,
   items: (shopId: string, query: ItemsQuery) =>
@@ -48,6 +55,8 @@ export const qk = {
     ["shops", shopId, "export", "validate"] as const,
   shopExports: (shopId: string) => ["shops", shopId, "exports"] as const,
   activeJob: (shopId: string) => ["shops", shopId, "jobs", "active"] as const,
+  storage: ["storage"] as const,
+  shopStorage: (id: string) => ["shops", id, "storage"] as const,
 };
 
 // ---------------------------------------------------------------------------
@@ -127,6 +136,58 @@ export function useDeleteGeminiKey() {
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: qk.me });
     },
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Key pool
+// ---------------------------------------------------------------------------
+
+export function useApiKeys() {
+  return useQuery({
+    queryKey: qk.keys,
+    queryFn: () => get<ApiKey[]>("/auth/keys"),
+  });
+}
+
+function useInvalidateKeys() {
+  const qc = useQueryClient();
+  return () => {
+    void qc.invalidateQueries({ queryKey: qk.keys });
+    void qc.invalidateQueries({ queryKey: qk.me });
+  };
+}
+
+export function useAddApiKey() {
+  const invalidate = useInvalidateKeys();
+  return useMutation({
+    mutationFn: (payload: AddKeyPayload) => post<ApiKey>("/auth/keys", payload),
+    onSuccess: invalidate,
+  });
+}
+
+export function useUpdateApiKey() {
+  const invalidate = useInvalidateKeys();
+  return useMutation({
+    mutationFn: ({ id, payload }: { id: string; payload: UpdateKeyPayload }) =>
+      patch<ApiKey>(`/auth/keys/${id}`, payload),
+    onSuccess: invalidate,
+  });
+}
+
+export function useDeleteApiKey() {
+  const invalidate = useInvalidateKeys();
+  return useMutation({
+    mutationFn: (id: string) => del<void>(`/auth/keys/${id}`),
+    onSuccess: invalidate,
+  });
+}
+
+export function useTestApiKey() {
+  const invalidate = useInvalidateKeys();
+  return useMutation({
+    mutationFn: (id: string) => post<ApiKey>(`/auth/keys/${id}/test`),
+    onSuccess: invalidate,
   });
 }
 
@@ -366,6 +427,49 @@ export function useUploadItemReference(shopId: string) {
       return postForm<Item>(`/items/${id}/reference`, form);
     },
     onSuccess: invalidate,
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Storage
+// ---------------------------------------------------------------------------
+
+export function useStorageUsage() {
+  return useQuery({
+    queryKey: qk.storage,
+    queryFn: () => get<StorageUsage>("/storage"),
+  });
+}
+
+export function useShopStorage(shopId: string | undefined) {
+  return useQuery({
+    queryKey: qk.shopStorage(shopId ?? ""),
+    queryFn: () => get<ShopStorage>(`/shops/${shopId}/storage`),
+    enabled: Boolean(shopId),
+  });
+}
+
+export function usePurgeShopImages() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (shopId: string) => post<PurgeResult>(`/shops/${shopId}/purge-images`),
+    onSuccess: (_result, shopId) => {
+      void qc.invalidateQueries({ queryKey: qk.storage });
+      void qc.invalidateQueries({ queryKey: qk.shopStorage(shopId) });
+      void qc.invalidateQueries({ queryKey: ["shops", shopId, "items"] });
+      void qc.invalidateQueries({ queryKey: qk.shop(shopId) });
+    },
+  });
+}
+
+export function useDeleteShop() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (shopId: string) => del<void>(`/shops/${shopId}`),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: qk.shops });
+      void qc.invalidateQueries({ queryKey: qk.storage });
+    },
   });
 }
 

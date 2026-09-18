@@ -239,6 +239,8 @@ export interface MeResponse {
   user: User;
   has_gemini_key: boolean;
   gemini_key_hint: string | null;
+  key_count: number;
+  enabled_key_count: number;
 }
 
 // SPEC-GAP: PUT /api/auth/gemini-key's success response isn't shown in §6
@@ -278,6 +280,61 @@ export interface ReferenceUploadResponse {
 
 export interface SetKeyPayload {
   key: string;
+}
+
+// ---------------------------------------------------------------------------
+// Key pool (backend/app/schemas.py ApiKeyOut/ApiKeyIn/ApiKeyPatch)
+// ---------------------------------------------------------------------------
+
+export interface ApiKey {
+  id: string;
+  label: string;
+  key_hint: string;
+  enabled: boolean;
+  disabled_reason: string | null;
+  created_at: string;
+  last_used_at: string | null;
+  delay_s: number;
+  next_allowed_at: string | null;
+  busy: boolean;
+}
+
+export interface AddKeyPayload {
+  key: string;
+  label?: string;
+}
+
+export interface UpdateKeyPayload {
+  label?: string;
+  enabled?: boolean;
+}
+
+// ---------------------------------------------------------------------------
+// Storage (backend/app/schemas.py ShopStorageOut/StorageUsageOut/PurgeResultOut)
+// ---------------------------------------------------------------------------
+
+export interface ShopStorage {
+  shop_id: string;
+  shop_name: string;
+  dish_bytes: number;
+  dish_count: number;
+  menu_bytes: number;
+  menu_count: number;
+  reference_bytes: number;
+  export_bytes: number;
+  export_count: number;
+  total_bytes: number;
+}
+
+export interface StorageUsage {
+  total_bytes: number;
+  budget_bytes: number;
+  shops: ShopStorage[];
+}
+
+export interface PurgeResult {
+  deleted_images: number;
+  bytes_freed: number;
 }
 
 export interface UpdateItemPayload {
@@ -325,4 +382,10 @@ export interface StepResult {
   remaining: number;
   done: number;
   failed: number;
+  /** The server's authoritative wait before THIS lane's next step, in ms. */
+  next_step_ms: number;
+  /** Hint of the key this lane just used, null if none was leased. */
+  key_hint: string | null;
+  /** How many lanes the server wants the client running right now. */
+  lanes: number;
 }
