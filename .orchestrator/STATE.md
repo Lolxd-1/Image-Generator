@@ -8,7 +8,7 @@ updated: 2026-09-18T08:40:00Z · Claude Code / Opus 5
 <!-- status: recon | planning | awaiting-approval | executing | integrating | done | blocked -->
 
 ## NEXT ACTION
-Review T04; gate T05; then T06.
+Fix T04 review finding, re-gate, then T06.
 
 ## Baseline
 `cd backend && python -m pytest -q && cd ../frontend && npx tsc --noEmit` -> exit 0.
@@ -19,7 +19,7 @@ Review T04; gate T05; then T06.
 - [x] T02 keypool engine + tests — w2 — done 30d3f7c..de06ec1 (gate PASS, review pending)
 - [x] T03 keys router, /me, boot backfill — w3 — done 0a8a91e..a5d9904 (gate PASS)
 - [x] T04 route generate_step through the pool — w4 — done 663760f..62a4a59 (gate PASS, review pending)
-- [~] T05 storage usage, purge, delete catalog — w5 — deps T01
+- [x] T05 storage usage, purge, delete catalog — w5 — done fe256c9..c9cc9cc (gate PASS)
 - [ ] T06 frontend api layer + N-lane loop — w6 — deps T03,T04,T05
 - [ ] T07 Settings screen + delete/download UI — w7 — deps T06
 

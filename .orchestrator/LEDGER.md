@@ -10,3 +10,6 @@
   one /step call, and the lane retries — cost if wrong: one spurious 500 in a log.
 - T03 done: /api/auth/keys CRUD + test, pool-aware /me, boot backfill. gate PASS.
 - T04 done: generate_step leases a key per call; auth failure disables one key, not the job. gate PASS.
+- T05 done: /api/storage, /shops/{id}/storage, purge-images, DELETE /shops/{id}. gate PASS.
+- T04 review: CHANGES_REQUIRED, 1 important (no-reference-image branch drops next_delay_ms ->
+  the client busy-loops /step at 0ms). Fix dispatched to the T04 executor, round 1.
