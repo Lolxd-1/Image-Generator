@@ -18,3 +18,4 @@
   aiplatform.googleapis.com is not enabled in any of their 7 GCP projects. The pool stays
   empty until the user enables it; nothing in the build depends on it.
 - T06 done: N-lane generate loop + key/storage hooks. gate PASS.
+- Final review: CHANGES_REQUIRED, 0 critical, 2 important, 11 minor -> FIX1.

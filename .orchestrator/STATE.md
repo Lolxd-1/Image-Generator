@@ -8,7 +8,7 @@ updated: 2026-09-18T08:40:00Z · Claude Code / Opus 5
 <!-- status: recon | planning | awaiting-approval | executing | integrating | done | blocked -->
 
 ## NEXT ACTION
-Gate T06, then T07, then Phase 4.
+Gate FIX1, re-review, then close.
 
 ## Baseline
 `cd backend && python -m pytest -q && cd ../frontend && npx tsc --noEmit` -> exit 0.
@@ -26,3 +26,4 @@ Gate T06, then T07, then Phase 4.
 ## Open questions
 - The user's Gemini keys have not been pasted yet. Nothing in the build depends on them; they
   go in through the Settings page (or `POST /api/auth/keys`) once the run is green.
+- [~] FIX1 apply final-review findings — w8 — deps T07
