@@ -13,3 +13,7 @@
 - T05 done: /api/storage, /shops/{id}/storage, purge-images, DELETE /shops/{id}. gate PASS.
 - T04 review: CHANGES_REQUIRED, 1 important (no-reference-image branch drops next_delay_ms ->
   the client busy-loops /step at 0ms). Fix dispatched to the T04 executor, round 1.
+- T04 fix round 1 applied (next_delay_ms restored on the missing-reference branch). re-gate PASS.
+- Finding (operator, not code): all 7 of the user's Gemini keys return 403 SERVICE_DISABLED -
+  aiplatform.googleapis.com is not enabled in any of their 7 GCP projects. The pool stays
+  empty until the user enables it; nothing in the build depends on it.
