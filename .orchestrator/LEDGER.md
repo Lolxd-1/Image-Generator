@@ -19,3 +19,9 @@
   empty until the user enables it; nothing in the build depends on it.
 - T06 done: N-lane generate loop + key/storage hooks. gate PASS.
 - Final review: CHANGES_REQUIRED, 0 critical, 2 important, 11 minor -> FIX1.
+- FIX1 gate: Verify PASS; the only failing check was TAMPER, caused by the one-line PLAN.md
+  Test-matrix rename that FIX1's own brief (step 2) instructed. Ruling: accept as PASS —
+  why: the edit is exactly the instructed line and nothing else — cost if wrong: a stale
+  test name in the plan's matrix.
+- Final re-review: APPROVE. 0 critical, 0 important, 0 minor. All 13 findings fixed, no regressions.
+- verify-all after FIX1: 112 passed (baseline 95), tsc clean. Run closed.

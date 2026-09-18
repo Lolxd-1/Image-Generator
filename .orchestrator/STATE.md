@@ -3,12 +3,12 @@
 run: multi-key-pool
 branch: orch/multi-key-pool
 run-base: a37b524cc5fd47704c1a5ad78ff0e8c4b1c5a6b3
-status: integrating
+status: done
 updated: 2026-09-18T08:40:00Z · Claude Code / Opus 5
 <!-- status: recon | planning | awaiting-approval | executing | integrating | done | blocked -->
 
 ## NEXT ACTION
-Gate FIX1, re-review, then close.
+Run complete. Awaiting the user: enable Vertex AI per project, then load the keys and merge.
 
 ## Baseline
 `cd backend && python -m pytest -q && cd ../frontend && npx tsc --noEmit` -> exit 0.
@@ -26,4 +26,4 @@ Gate FIX1, re-review, then close.
 ## Open questions
 - The user's Gemini keys have not been pasted yet. Nothing in the build depends on them; they
   go in through the Settings page (or `POST /api/auth/keys`) once the run is green.
-- [~] FIX1 apply final-review findings — w8 — deps T07
+- [x] FIX1 apply final-review findings — w8 — done 1246b10..803b5b0 (Verify PASS; tamper = the instructed PLAN.md line)
